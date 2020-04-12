@@ -1,0 +1,708 @@
+---
+title: "DS Bootcamp in R"
+date: "`r Sys.Date()`"
+author: Mirjana Dmitrović
+output:
+  rmdformats::material:
+    highlight: kate
+---
+
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+
+opts_chunk$set(echo=TRUE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+```{r include=FALSE}
+#install.packages("readr")
+#install.packages("dplyr")
+#install.packages("forcats")
+#install.packages("DT")
+#install.packages("stringr")
+#install.packages("ggplot2")
+#install.packages("tidyr")
+#install.packages("tidyverse") 
+#install.packages("formatR")
+#install.packages("RColorBrewer")
+#install.packages("rmarkdown")
+
+library("readr")
+library("dplyr")
+library("forcats")
+library("DT")
+library("stringr")
+library("ggplot2")
+library("tidyr")
+library("tidyverse") 
+library("formatR")
+library(RColorBrewer)
+library(rmarkdown)
+```
+
+# **Olympic Games**
+
+The Olympics is more than just a quadrennial multi-sport world championship. It is a lense through which to understand global history, including shifting geopolitical power dynamics, women’s empowerment, and the evolving values of society. 
+
+
+# **Dataset - at a glance**
+
+We will explore a dataset on the modern Olympic Games, including all the Games from Athens 1896 to Rio 2016. Data can be found on [Kaggle - 120 years of Olympic history](https://www.kaggle.com/heesoo37/120-years-of-olympic-history-athletes-and-results) or using *‘athlete_events.csv’* file available from <https://github.com/TanjaKec/RMarkdown4RR> (inside the data folder).
+
+This dataset provides an opportunity to ask questions about how the Olympics have evolved over time, including questions about the participation and performance of women, different nations, and different sports and events.
+
+
+## 1. Import data to R
+
+Package `readr` reads rectangular data more quickly than base R `read.csv()` function and assumes that characters are strings and not factors by default.
+
+Make sure you download ‘athlete_events.csv’ and save it to your working directory.
+
+```{r import1}
+olympic_base <- read_csv("athlete_events.csv")
+```
+
+## 2. Scan data
+
+It is always a good idea to have a look at the data and its structure by using the `glimpse()` function from the `dplyr` package, before start using it for analysis. 
+Also we can use functions: `dim()`,`head()`,`str()`,`summary()`.  
+
+```{r scan1}
+dim(olympic_base)
+```
+
+```{r scan2}
+head(olympic_base,3)
+```
+
+```{r scan3}
+str(olympic_base)
+```
+
+```{r scan4}
+summary(olympic_base)
+```
+
+```{r scan5}
+glimpse(olympic_base)
+```
+
+So, `olympic_base df` contains: 
+
+  - *271.116* rows (*observations*)   
+
+Each row corresponds to an individual athlete competing in an individual Olympic event (athlete-events).The ID column can be used to uniquely identify athletes, since some athletes have the same name.
+
+  - *15* columns (*variables*)
+  
+```{r colnames}
+colnames(olympic_base)
+```
+
+**Attribute variables** are: *Name*, *Sex*, *Team*, *NOC*, *Games*, *Season*, *City*, *Sport*, *Event*, *Medal*. 
+
+**Measure variables** are: *ID*, *Age*, *Height*, *Weight*, *Year*
+
+*Note*: Variable *NOC* -  3-letter abbreviation for all National Olympic Committees
+
+### a) Missing values
+
+```{r missing}
+sapply(olympic_base, function(x) sum(is.na (x)))
+```
+
+*Age*, *Height* and *Weight* have a lot of missing values. 
+Missing values in variable *Medals* can be explained since not all participating athletes would win medals. so, we recode "NA" to "No Medal"
+
+```{r recode}
+olympic_base$Medal[is.na(olympic_base$Medal)]<-"No Medal"
+```
+
+
+### b) Unique values
+
+```{r unique}
+unlist(lapply(olympic_base, function(x) length(unique(x))))
+```
+
+Well, NOC code isn't linked to unique team.  
+
+```{r group}
+olympic_base%>%
+  
+  group_by(NOC)%>%
+  
+  summarise(No_Teams=n_distinct(Team)) %>%
+  
+  arrange(desc(No_Teams)) %>%
+  
+  DT::datatable()
+```
+
+Hmm, NOC code 'FRA' is associated with 160 teams, 'USA' with 97, etc.
+So, for further analysis we should **USE** *NOC* variable **NOT** *Team*, as I thought.
+Maybe it's better to know the name of country then 3 letter abbriviation. Let's do that. 
+
+# **Cleaning dataset**
+
+We want that NOC code is link with one Team. Name of Team is assosiate with Country of that time. 
+
+### a) Merge datasets 
+
+We want to add some data -> to incorporate Country Name that correspond to NOC code.
+
+Import data `noc_region.csv` as `country` df and have a quick glance.
+
+```{r import2}
+noc_base <- read_csv("noc_regions.csv")
+glimpse(noc_base)
+```
+
+Now we need to merge the original dataset `olympic_base` df with the `noc_base` df  using the NOC code as the primary key. 
+
+```{r merge}
+olympic_new <- left_join(olympic_base, noc_base,
+                         by=c("NOC" = "NOC"))
+```
+
+We add variable *Country*. That variable will be for making Team names. 
+
+```{r new variable1}
+olympic_new <- mutate(olympic_new, Country=NOC)
+```
+
+Let's look at column *region* (which is useful for linking NOC and future name of Team). 
+Do *region* have unique *NOC*? 
+
+```{r region}
+olympic_new %>%
+  
+  group_by(region) %>%
+  
+  summarise(No_NOCs=n_distinct(NOC)) %>%
+  
+  filter(No_NOCs>1)%>%
+  
+  arrange(desc(No_NOCs))%>%
+  
+  DT::datatable()
+```
+
+
+Hmmm,Noooo. That is because of history. Keep in mind that!
+
+For missing values we also have 4 NOCs.
+
+Now, we will group, because we want to know for what NOC code we have NA (and how many) in variable *region* and also how many different teams correspond to that NOCs.
+
+```{r where miss and num teams}
+olympic_new %>% 
+  
+  filter(is.na(region)) %>% 
+  
+  group_by(NOC) %>% 
+  
+  summarise(Cases=n(),No_Teams=n_distinct(Team)) %>% 
+  
+  arrange(Cases)%>%
+  
+  DT::datatable()
+```
+
+
+What we have as additional information in columns *Team* and *notes*? Let's look separately (for each NOC code).   
+
+```{r infoUNK}
+lapply(olympic_new[olympic_new$NOC=="UNK",c("Team","notes")],function(x)unique(x))
+```
+
+```{r infoTUV}
+lapply(olympic_new[olympic_new$NOC=="TUV", c("Team","notes")],function(x)unique(x))
+```
+
+```{r infoROT}
+lapply(olympic_new[olympic_new$NOC=="ROT", c("Team","notes")],function(x)unique(x))
+```
+
+```{r infoSGP}
+lapply(olympic_new[olympic_new$NOC=="SGP", c("Team","notes")],function(x)unique(x))
+```
+
+In column *Country* we change:
+
+1. UNK - Unknown
+2. TUV - Tuvalu
+3. ROT - Refugee Olympic Athletes
+4. SGP - Singapore
+
+In package `forcats` function `fct_recode` could help us with organising data into ideal format.  
+
+```{r change1}
+olympic_new<-olympic_new%>%
+  
+  mutate(Country=fct_recode(Country,
+                            "Unknown"="UNK",
+                            "Tuvalu"="TUV",
+                            "Refugee Olympic Athletes"="ROT",
+                            "Singapore"="SGP"))
+```
+
+What NOC codes are for regions with more than one code?
+
+```{r find NOCs}
+olympic_new %>%
+  
+  filter(region %in% c("Germany","Czech Republic", "Malaysia", "Russia", "Serbia", "Yemen", "Australia", "Canada", "China", "Greece", "Syria", "Trinidad", "Vietnam", "Zimbabwe"))%>%
+  
+  group_by(region,NOC)%>%
+  
+  summarise()
+```
+
+And change 
+
+```{r change2}
+olympic_new<-olympic_new%>%
+  
+  mutate(Country=fct_recode(Country,
+                            "Australasia"="ANZ",
+                            "Newfoundland"="NFL",
+                            "Hong Kong"="HKG",
+                            "Bohemia"="BOH",
+                            "Czechoslovakia"="TCH",
+                            "West Germany"="FRG",
+                            "East Germany"="GDR",
+                            "Saar"="SAA",
+                            "Crete"="CRT",
+                            "Malaya"="MAL",
+                            "North Borneo"="NBO",
+                            "Unified Team"="EUN",
+                            "Soviet Union"="URS",
+                            "Serbia and Montenegro"="SCG",
+                            "Yugoslavia"="YUG",
+                            "United Arab Republic"="UAR",
+                            "Trinidad and Tobago"="TTO",
+                            "West Indian Federation"="WIF",
+                            "South Vietnam"="VNM",
+                            "North Yemen"="YAR",
+                            "South Yemen"="YMD",
+                            "Rhodesia"="RHO"))
+```
+
+We make new column *No_char* - length of string.
+
+```{r length}
+olympic_new<-olympic_new %>%
+  
+  mutate(No_char=nchar(as.character(Country)))
+```
+
+Change all cases with length 3 with name of region.
+
+```{r change3}
+olympic_new$Country<-ifelse(olympic_new$No_char==3,paste(olympic_new$region),paste(olympic_new$Country))
+```
+
+Remove variables *notes* and *No_char*.
+
+```{r remove}
+olympic<-olympic_new[,-c(17,19)]
+```
+
+Tedious job!!
+But the more we do it and the more experience we gain the easier and less painful it gets.
+
+Change name variable *Country* to *Team-NOC*
+
+```{r change name of var}
+colnames(olympic)[17]<-"TeamNOC"
+```
+
+Hurray!!! One NOC is linked with one team.
+
+
+**TASK:**
+
+*a) Find variables that end with letter t and start with letter S using `select()` function.*
+
+```{r select}
+colnames(select(olympic, starts_with("S") & ends_with("t")))
+```
+
+*b) Create new variable - Body Mass Index using `mutate()` function.*
+
+```{r new variable}
+olympic<-olympic%>%
+  
+  mutate(BMI=Weight/(Height/100)**2)
+```
+and round to 1 decimal place
+
+```{r round}
+olympic[,'BMI']=round(olympic[,'BMI'],1)
+head(olympic$BMI,5)
+``` 
+
+# **Serbia**
+
+*a) Find from data using 'filter()' function:*
+
+*a1: only Serbian teams?*
+
+```{r SRB Team}
+olympicSR<-filter(olympic, TeamNOC=="Serbia")
+head(olympicSR, 5)
+```
+
+*a2: only Serbian teams from 2000 onward?*
+
+```{r 21c SRB Team}
+olympicSR21c<- filter(olympicSR, Year>=2000)
+head(olympicSR21c, 5)
+```
+
+*a3: athletes in Serbian team from 2000 onward whose weight is bigger than 100kg and height is over 2m?*
+
+```{r big athletes}
+athletes_big<-filter(olympicSR21c, Weight>=100 &  Height>200)
+head(athletes_big,5)
+```
+
+
+*b) Arrange Serbian athletes in `olympicSR21c` df by Height in ascending and descending order.*
+
+Ascending order:
+
+```{r ascending}
+olympicSR21c_a<-arrange(olympicSR21c, Height)
+head(olympicSR21c_a,5)
+```
+
+Descending order:
+
+```{r descending}
+olympicSR21c_d<-arrange(olympicSR21c, desc(Height))
+head(olympicSR21c_d,5)
+```
+
+
+*c) Using `olympicSR` df find:** 
+
+    c1) the youngest athlete
+
+    c2) the heaviest athlete
+
+*c1: the youngest athlete*
+
+```{r youngest1}
+athletesSR_y<-arrange(olympicSR, Age)
+head(athletesSR_y,5)
+```
+
+Or if we want to see only name(s) and age of the youngest athlete(s)
+
+```{r youngest2}
+unique(olympicSR[olympicSR$Age==min(olympicSR$Age), c("Name","Age")])
+```
+
+
+*c2: the heaviest athlete*
+
+```{r heaviest1}
+athletesSR_h<-arrange(olympicSR, desc(Weight))
+head(athletesSR_h,5)
+```
+
+
+```{r heaviest2}
+unique(olympicSR[olympicSR$Weight==max(olympicSR$Weight), c("Name","Weight")])
+```
+
+*d) Use 'summarise()' to print out a summary of `olympicSR` df containing two variables::* 
+
+*d1: max_Age and max_BMI*
+
+```{r summarise max}
+summarise(olympicSR, max_Age=max(Age), max_BMI=max(BMI))
+```
+
+*d2: mean_Age and mean_BMI*
+
+```{r summarise mean}
+summarise(olympicSR,mean_Age=mean(Age), mean_BMI=mean(BMI))
+```
+
+
+
+*e) Find and visualise data about the number of medals per Serbian team after 2000?*
+
+*e1: Table* 
+
+```{r No_Medal1}
+
+olympicSR21c%>%
+  
+  mutate(Medal=factor(Medal,levels=c("Gold","Silver","Bronze","No Medal")))%>%
+  
+  filter(Medal!="No Medal")%>%
+  
+  group_by(Medal)%>%
+  
+  summarise(Number=n())%>%
+
+  DT::datatable()
+```
+
+*e2: Graph*
+
+```{r graph1}
+
+olympicSR21c%>% 
+  
+  mutate(Medal=factor(Medal,levels=c("Gold","Silver","Bronze","No Medal")))%>%
+  
+  filter(Medal!="No Medal")%>%
+  
+  group_by(Medal)%>%
+  
+  summarise(Number=n())%>%
+  
+  ggplot(aes(x = Medal, y = Number, fill = Medal)) +
+  
+  geom_bar(stat="identity", color = "black") +
+  
+  geom_text(aes(label=Number), vjust=1.5, size=4)+
+  
+  labs (title = "Medals for Serbian team after 2000", 
+         caption = "Data from: kaggle - 120 years of Olympic history", 
+         x = "Medal", y = "Number_Medals") +
+  
+  theme(plot.title = element_text(size = 14, vjust = 2, hjust=0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_blank())+
+  
+  theme(legend.position="none")+
+  
+  scale_fill_brewer(palette="Dark2")
+```
+
+All medals are from Summer Games
+
+```{r}
+olympicSR21c%>% 
+
+  filter(Medal!="No Medal")%>%
+  
+  group_by(Season,Medal)%>%
+  
+  summarise(Number=n())%>%
+  
+  DT::datatable()
+```
+
+
+*f) Sports with medals*
+
+```{r}
+olympicSR21c %>%
+  
+  filter(Medal!="No Medal")%>%
+  
+  group_by(Sport)%>%
+  
+  summarise(Number_Medals=n())%>%
+  
+  ggplot(aes(x = reorder(Sport,Number_Medals), y = Number_Medals, fill = Sport )) +
+  
+  geom_bar(stat="identity", color = "black") +
+  
+  geom_text(aes(label=Number_Medals), vjust=0.5, hjust=-0.5, size=3)+
+
+  coord_flip() +
+  
+  labs (title = "Sports with medals", 
+        x = "Sport", y = "Medals") +
+  
+  theme(plot.title = element_text(size = 14, vjust = 2, hjust=0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_blank())+
+  
+  theme(legend.position="none")+
+  
+  scale_fill_brewer(palette="Paired")
+```
+
+
+*g) Gender ratio of Serbian participant*
+
+```{r pie chart}
+olympicSR21c%>%
+  
+  group_by(Sex)%>%
+  
+  summarise(Number=n(), ptc=round(Number/NROW(olympicSR21c$Sex)*100))%>%
+  
+  ggplot(aes(x="", y=ptc, fill=Sex)) +
+  
+  geom_bar(stat="identity", width=1, color="black") +
+  
+  coord_polar("y", start=0) +
+  
+  theme_void()+
+  
+  theme(plot.title = element_text(size = 14, vjust = 2, hjust=0.5))+
+  
+  labs(title="Gender ratio")+
+  
+  geom_text(aes(label = paste(ptc,"%")), position = position_stack(vjust = 0.5),color="black",size=4) +
+  
+  scale_fill_brewer(palette="Dark2")  
+```
+
+
+*h) Medals per gender*
+
+```{r}
+olympicSR21c%>% 
+  
+  mutate(Medal=factor(Medal,levels=c("Gold","Silver","Bronze","No Medal")))%>%
+  
+  filter(Medal!="No Medal")%>%
+  
+  group_by(Medal,Sex)%>%
+  
+  summarise(Number=n())%>%
+  
+  ggplot(aes(x = Medal, y = Number, fill = Sex)) +
+  
+  geom_bar(stat="identity", position = "dodge", color = "black") + 
+  
+  geom_text(aes(label=Number), position=position_dodge(width=0.9),vjust=-0.25,size=4)+
+  
+  labs (title = "Medals for Serbian team per Gender", 
+        x = "Medal", y = "frequency") +
+  
+  theme(plot.title = element_text(size = 14, vjust = 2, hjust=0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_blank())+
+  
+  theme(legend.position="right")+
+  
+  scale_fill_brewer(palette="Dark2")
+```
+
+*i) Age distributions for Serbian team*
+
+```{r}
+olympicSR21c%>% 
+  
+  ggplot(aes(x=Sex,y=Age,fill=Sex))+
+  
+  geom_boxplot(outlier.colour ="hotpink")+
+  
+  geom_jitter(position = position_jitter(width = 0.1, height = 0),alpha=.2) +
+  
+  theme(plot.title = element_text(size = 14, vjust = 2, hjust=0.5),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_blank())+
+  
+  labs(title="Age Distributions",x="Gender", y="Age")+
+  
+  scale_fill_brewer(palette="Dark2")+
+  
+  theme(legend.position="none")
+```
+
+
+# **World**
+
+
+*a) Find and visualise data about the number of medals per each team?* 
+
+*a1: Table*
+
+```{r No_Medal2}
+
+olympic%>% 
+  
+  filter(Medal!="No Medal") %>% 
+  
+  group_by(TeamNOC) %>% 
+  
+  summarise(Number_Medals=n()) %>% 
+  
+  arrange(desc(Number_Medals))%>%
+  
+  DT::datatable()
+```
+
+*a2: Graph*
+
+```{r No_Medal graph2}
+ 
+olympic %>% 
+  
+  filter(Medal!="No Medal")%>%
+  
+  group_by(TeamNOC) %>% 
+  
+  summarise(Number_Medals=n()) %>%
+  
+  top_n(5,Number_Medals)%>%
+  
+  ggplot(aes(x = reorder(TeamNOC,Number_Medals), y = Number_Medals, fill=TeamNOC)) +
+  
+  geom_bar(stat="identity", color = "black") + 
+  
+  coord_flip()+
+  
+  theme_classic()+
+   
+  labs (title = "Medals per Team - Top 5", 
+        caption = "Data from: kaggle - 120 years of Olympic history", 
+        x = "Top 5 teams", y = "Number_Medals")+
+  
+  theme(legend.position="none")+
+  
+  scale_fill_brewer(palette="Dark2")
+```
+```{r}
+olympic %>% 
+
+  mutate(Medal=factor(Medal,levels=c("Gold","Silver","Bronze","No Medal")))%>%
+  
+  filter(Medal!="No Medal" & TeamNOC %in% c("USA","Soviet Union","Germany","UK","France")) %>%
+  
+  group_by(TeamNOC,Medal) %>% 
+  
+  summarise(Number_Medals=n())%>%
+  
+  ggplot(aes(x = reorder(TeamNOC,-Number_Medals), y = Number_Medals, fill=Medal)) +
+  
+  geom_bar(stat="identity", color = "black") + 
+  
+  theme_classic()+
+   
+  labs (title = "Medals per Team - Top 5", 
+        caption = "Data from: kaggle - 120 years of Olympic history", 
+        x = "Top 5 teams", y = "Number_Medals")+
+  
+  theme(legend.position="right")+
+  
+  scale_fill_brewer(palette="Dark2")
+```
+  
